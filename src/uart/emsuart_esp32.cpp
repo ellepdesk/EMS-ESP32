@@ -1,7 +1,7 @@
 /*
  * EMS-ESP - https://github.com/emsesp/EMS-ESP
  * Copyright 2020-2023  Paul Derbyshire
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -34,6 +34,8 @@ namespace emsesp {
 
 static QueueHandle_t uart_queue;
 uint8_t              tx_mode_ = 0xFF;
+uint32_t             inverse_mask = 0;
+
 
 /*
 * receive task, wait for break and call incoming_telegram
@@ -82,8 +84,21 @@ void EMSuart::start(const uint8_t tx_mode, const uint8_t rx_gpio, const uint8_t 
             .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
             .source_clk = UART_SCLK_APB,
         };
+        bool tx_invert = true;
+        bool rx_invert = true;
+
+        uint32_t inverse_mask = 0;
+        if (rx_invert)
+            inverse_mask |= UART_SIGNAL_RXD_INV;
+        if (tx_invert)
+            inverse_mask |= UART_SIGNAL_TXD_INV;
+
+
         uart_param_config(EMSUART_NUM, &uart_config);
         uart_set_pin(EMSUART_NUM, tx_gpio, rx_gpio, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        uart_set_line_inverse(EMSUART_NUM, inverse_mask);
+        gpio_set_pull_mode(gpio_num_t(rx_gpio), GPIO_PULLUP_ONLY);
+
         uart_driver_install(EMSUART_NUM, 129, 0, (EMS_MAXBUFFERSIZE + 1) * 2, &uart_queue, 0); // buffer must be > fifo
         uart_set_rx_full_threshold(EMSUART_NUM, 1);
         uart_set_rx_timeout(EMSUART_NUM, 0); // disable
@@ -91,6 +106,7 @@ void EMSuart::start(const uint8_t tx_mode, const uint8_t rx_gpio, const uint8_t 
         // note esp32s3 crashes with 2k stacksize, stack overflow here sometimes wipes settingsfiles.
         xTaskCreate(uart_event_task, "uart_event_task", 2560, NULL, configMAX_PRIORITIES - 1, NULL);
     }
+
     tx_mode_ = tx_mode;
     uart_enable_intr_mask(EMSUART_NUM, UART_BRK_DET_INT_ENA | UART_RXFIFO_FULL_INT_ENA);
 }
@@ -136,9 +152,9 @@ uint16_t EMSuart::transmit(const uint8_t * buf, const uint8_t len) {
             uart_write_bytes(EMSUART_NUM, &buf[i], 1);
             delayMicroseconds(EMSUART_TX_WAIT_PLUS);
         }
-        uart_set_line_inverse(EMSUART_NUM, UART_SIGNAL_TXD_INV);
+        uart_set_line_inverse(EMSUART_NUM, UART_SIGNAL_TXD_INV ^ inverse_mask);
         delayMicroseconds(EMSUART_TX_BRK_PLUS);
-        uart_set_line_inverse(EMSUART_NUM, 0);
+        uart_set_line_inverse(EMSUART_NUM, inverse_mask);
         return EMS_TX_STATUS_OK;
     }
 
@@ -147,9 +163,9 @@ uint16_t EMSuart::transmit(const uint8_t * buf, const uint8_t len) {
             uart_write_bytes(EMSUART_NUM, &buf[i], 1);
             delayMicroseconds(EMSUART_TX_WAIT_HT3);
         }
-        uart_set_line_inverse(EMSUART_NUM, UART_SIGNAL_TXD_INV);
+        uart_set_line_inverse(EMSUART_NUM, UART_SIGNAL_TXD_INV ^ inverse_mask);
         delayMicroseconds(EMSUART_TX_BRK_HT3);
-        uart_set_line_inverse(EMSUART_NUM, 0);
+        uart_set_line_inverse(EMSUART_NUM, inverse_mask);
         return EMS_TX_STATUS_OK;
     }
 
@@ -164,9 +180,9 @@ uint16_t EMSuart::transmit(const uint8_t * buf, const uint8_t len) {
             uart_get_buffered_data_len(EMSUART_NUM, &rx1);
         } while ((rx1 == rx0) && (--timeoutcnt));
     }
-    uart_set_line_inverse(EMSUART_NUM, UART_SIGNAL_TXD_INV);
+    uart_set_line_inverse(EMSUART_NUM, UART_SIGNAL_TXD_INV ^ inverse_mask);
     delayMicroseconds(EMSUART_TX_BRK_EMS);
-    uart_set_line_inverse(EMSUART_NUM, 0);
+    uart_set_line_inverse(EMSUART_NUM, inverse_mask);
     return EMS_TX_STATUS_OK;
 }
 
